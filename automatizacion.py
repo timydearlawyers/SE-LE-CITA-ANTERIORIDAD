@@ -3,6 +3,7 @@ import xml.etree.ElementTree as ET
 from datetime import date, timedelta
 from pathlib import Path
 from playwright.sync_api import sync_playwright
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 from supabase import create_client, Client
 import os
@@ -61,37 +62,23 @@ class SigaDatabase:
         self.client = None
 
     def insert_expediente(self, data: dict) -> bool:
-        """Guardar un expediente en Supabase"""
+        """Guardar un expediente en Supabase (una sola llamada, ignora duplicados)."""
         try:
-            # Verificar duplicado
             response = (
-                self.client
-                .table("expedientes")
-                .select("expediente")
-                .eq("expediente", data["expediente"])
-                .execute()
-            )
-
-            if response.data:
-                print(f"  ⚠ Ya existe en BD: {data['expediente']}")
-                return False
-
-            # Insertar
-            insert_response = (
                 self.client
                 .table("expedientes")
                 .insert(data)
                 .execute()
             )
-
-            if insert_response.data:
+            if response.data:
                 print(f"  ✓ Guardado en BD: {data['expediente']}")
                 return True
-            else:
-                print(f"  ✗ Error al guardar: {insert_response}")
-                return False
-
+            print(f"  ✗ Error al guardar: {response}")
+            return False
         except Exception as e:
+            if "23505" in str(e) or "duplicate" in str(e).lower() or "unique" in str(e).lower():
+                print(f"  ⚠ Ya existe en BD: {data['expediente']}")
+                return False
             print(f"  ✗ Error al guardar: {e}")
             return False
         
@@ -808,7 +795,7 @@ def download_and_extract():
                 print(f"Error buscando: {e}")
 
             print("\n\nProcesando XMLs...")
-            count_expedientes, count_emails = extract_from_xmls(xml_files_downloaded, context)
+            count_expedientes, count_emails = extract_from_xmls(xml_files_downloaded, browser)
             return count_expedientes, count_emails
 
         except Exception as e:
@@ -844,8 +831,6 @@ def obtener_notificacion(page, numero_oficio: str) -> str:
         except:
             print("      ⚠ No se encontró la sección 'Trámite'")
             return None
-
-        time.sleep(1)
 
         tabla_info = page.evaluate("""
             () => {
@@ -899,12 +884,9 @@ def obtener_notificacion(page, numero_oficio: str) -> str:
 
             try:
                 lupa_link.scroll_into_view_if_needed()
-                time.sleep(0.5)
                 lupa_link.click(force=True, timeout=8000)
-                time.sleep(1.5)
 
                 page.wait_for_selector("div.ui-dialog:visible, div[id*='dlg']:visible", timeout=10000)
-                time.sleep(1)
 
                 modal = page.locator("div.ui-dialog:visible, div[id*='dlg']:visible").first
 
@@ -945,8 +927,6 @@ def obtener_notificacion(page, numero_oficio: str) -> str:
                 except:
                     page.keyboard.press("Escape")
 
-                time.sleep(1)
-
                 if resultado['encontrado']:
                     fecha = extraer_fecha_notificacion(texto_estado)
                     print(f"      📅 Fecha notificación: {fecha}")
@@ -956,7 +936,6 @@ def obtener_notificacion(page, numero_oficio: str) -> str:
                 print(f"      ⚠ Error en lupa {i+1}: {e}")
                 try:
                     page.keyboard.press("Escape")
-                    time.sleep(0.5)
                 except:
                     pass
 
@@ -974,7 +953,6 @@ def buscar_datos_titular(page, expediente: str, numero_oficio: str = None) -> di
 
     try:
         page.goto(url, wait_until="networkidle", timeout=60000)
-        time.sleep(5)
 
         # Esperar input real de PrimeFaces
         input_selector = "#frmBsqExp\\:expedienteId"
@@ -986,12 +964,11 @@ def buscar_datos_titular(page, expediente: str, numero_oficio: str = None) -> di
         input_exp.click()
         input_exp.fill(expediente)
 
-        time.sleep(1)
-
         # Click botón Buscar
         page.locator(btn_selector).click()
 
-        time.sleep(6)
+        # Esperar a que aparezcan los datos del titular en vez de sleep fijo
+        page.wait_for_selector("span[id$='dataTitNomId']", timeout=30000)
 
         # Función para leer tabla
         def safe_text(selector):
@@ -1030,140 +1007,154 @@ def buscar_datos_titular(page, expediente: str, numero_oficio: str = None) -> di
         }
 
 
-def extract_from_xmls(xml_files, context):
-    db = SigaDatabase()
-    
-    if not db.connect():
-        print("✗ No se pudo conectar a la BD")
-        return 0, 0
-    page_marca = context.new_page()
+def _worker_marcanet(exp_data: dict, browser) -> dict:
+    """Corre en un hilo: abre su propio context/page y busca datos en MarcaNet."""
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    try:
+        datos = buscar_datos_titular(page, exp_data["expediente"], exp_data["numero_oficio"])
+        return {**exp_data, "datos_titular": datos}
+    except Exception as e:
+        print(f"  ✗ Error worker MarcaNet ({exp_data['expediente']}): {e}")
+        return {**exp_data, "datos_titular": {"titular": None, "telefono": None, "email": None, "fecha_notificado": None}}
+    finally:
+        ctx.close()
 
+
+def extract_from_xmls(xml_files, browser):
     if not xml_files:
         print("No hay XMLs para procesar")
-        db.disconnect()
         return 0, 0
-    
+
     print(f"Procesando {len(xml_files)} archivo(s)...\n")
-    
-    count_saved = 0
-    count_emails = 0
-    
+
+    # ── Paso 1: leer todos los XMLs y recolectar expedientes que coincidan ────
+    pendientes = []
     for xml_path in xml_files:
         print(f"Leyendo: {xml_path.name}")
-        
         try:
             tree = ET.parse(xml_path)
             root = tree.getroot()
-            
             for ficha in root.findall(".//ficha"):
-                # Inicializar los 7 campos
-                expediente = None
-                registro_marca = None
-                serie_expediente = None
-                descripcion_oficio = None
-                numero_oficio = None
-                fecha_oficio = None
-                enlace_electronico = None
-                
-                # Extraer todos los campos de la ficha
+                expediente = registro_marca = serie_expediente = None
+                descripcion_oficio = numero_oficio = fecha_oficio = enlace_electronico = None
+
                 for campo in ficha.findall("campo"):
                     clave = campo.find("clave")
                     valor = campo.find("valor")
-                    
-                    if clave is not None and valor is not None:
-                        clave_text = (clave.text or "").strip()
-                        valor_text = (valor.text or "").strip()
-                        
-                        if clave_text == "Expediente":
-                            expediente = valor_text
-                        elif clave_text == "Registro de Marca":
-                            registro_marca = valor_text
-                        elif clave_text == "Serie del expediente":
-                            serie_expediente = valor_text
-                        elif clave_text == "Descripción del oficio":
-                            descripcion_oficio = valor_text
-                        elif clave_text == "Número del oficio":
-                            numero_oficio = valor_text
-                        elif clave_text == "Fecha del oficio":
-                            fecha_oficio = valor_text
-                        elif clave_text == "Enlace electrónico":
-                            enlace_electronico = valor_text
-                
-                # Verificar si tiene la frase buscada
+                    if clave is None or valor is None:
+                        continue
+                    c = (clave.text or "").strip()
+                    v = (valor.text or "").strip()
+                    if c == "Expediente":               expediente        = v
+                    elif c == "Registro de Marca":      registro_marca    = v
+                    elif c == "Serie del expediente":   serie_expediente  = v
+                    elif c == "Descripción del oficio": descripcion_oficio = v
+                    elif c == "Número del oficio":      numero_oficio     = v
+                    elif c == "Fecha del oficio":       fecha_oficio      = v
+                    elif c == "Enlace electrónico":     enlace_electronico = v
+
                 if descripcion_oficio and SEARCH_PHRASE in descripcion_oficio:
-                    datos_titular = buscar_datos_titular(page_marca, expediente, numero_oficio)
-                    
-                    # Guardar expediente principal (SIGA)
-                    data_siga = {
-                        'expediente': expediente or 'N/A',
-                        'registro_marca': registro_marca,
-                        'serie_expediente': serie_expediente,
-                        'descripcion_oficio': descripcion_oficio,
-                        'numero_oficio': numero_oficio,
-                        'fecha_oficio': fecha_oficio,
-                        'enlace_electronico': enlace_electronico,
-                        'archivo_xml': xml_path.name
-                    }
-
-                    db.insert_expediente(data_siga)
-
-                    # Guardar datos del titular (MarcaNet) y enviar correo
-                    if datos_titular["titular"]:
-                        data_titular = {
-                            'expediente': expediente,
-                            'titular': datos_titular["titular"],
-                            'telefono': datos_titular["telefono"],
-                            'email': datos_titular["email"],
-                            'fecha_notificado': datos_titular["fecha_notificado"]
-                        }
-                        db.insert_titular(data_titular)
-                        count_saved += 1
-                        
-                        # Guardar contacto en Brevo
-                        if datos_titular["email"]:
-                            upsert_perfil_brevo(
-                                email=datos_titular["email"],
-                                titular=datos_titular["titular"],
-                                telefono=datos_titular["telefono"],
-                                expediente=expediente
-                            )
-
-                            # Enviar correo via Brevo
-                            print(f"  📧 Enviando notificación al titular via Brevo...")
-                            correo_ok = enviar_correo_brevo(
-                                destinatario=datos_titular["email"],
-                                titular=datos_titular["titular"],
-                                expediente=expediente,
-                                descripcion=descripcion_oficio
-                            )
-                            if correo_ok:
-                                count_emails += 1
-
-                        # Crear item en Monday.com
-                        print(f"  📋 Guardando en Monday.com...")
-                        crear_item_monday(
-                            expediente=expediente,
-                            registro_marca=registro_marca,
-                            email=datos_titular.get("email"),
-                            telefono=datos_titular.get("telefono"),
-                            enlace_electronico=enlace_electronico,
-                            titular=datos_titular["titular"],
-                            fecha_gaceta=get_yesterday(),
-                            fecha_notificado=datos_titular.get("fecha_notificado")
-                        )
-        
+                    pendientes.append({
+                        "expediente":        expediente or "N/A",
+                        "registro_marca":    registro_marca,
+                        "serie_expediente":  serie_expediente,
+                        "descripcion_oficio": descripcion_oficio,
+                        "numero_oficio":     numero_oficio,
+                        "fecha_oficio":      fecha_oficio,
+                        "enlace_electronico": enlace_electronico,
+                        "archivo_xml":       xml_path.name,
+                    })
         except Exception as e:
-            print(f"  Error: {e}")
-    
-    # Desconectar de la BD
+            print(f"  Error leyendo {xml_path.name}: {e}")
+
+    if not pendientes:
+        print(f"\n✗ No se encontraron registros con '{SEARCH_PHRASE}'")
+        return 0, 0
+
+    print(f"\n>> {len(pendientes)} expediente(s) encontrado(s) — consultando MarcaNet en paralelo...\n")
+
+    # ── Paso 2: lookups en MarcaNet en paralelo ───────────────────────────────
+    max_workers = min(10, len(pendientes))
+    resultados = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_worker_marcanet, exp, browser): exp for exp in pendientes}
+        for future in as_completed(futures):
+            try:
+                resultados.append(future.result())
+            except Exception as e:
+                print(f"  ✗ Error en worker: {e}")
+
+    # ── Paso 3: guardar en BD, Brevo y Monday ────────────────────────────────
+    db = SigaDatabase()
+    if not db.connect():
+        print("✗ No se pudo conectar a la BD")
+        return 0, 0
+
+    count_saved  = 0
+    count_emails = 0
+
+    for r in resultados:
+        datos_titular = r["datos_titular"]
+
+        db.insert_expediente({
+            "expediente":        r["expediente"],
+            "registro_marca":    r["registro_marca"],
+            "serie_expediente":  r["serie_expediente"],
+            "descripcion_oficio": r["descripcion_oficio"],
+            "numero_oficio":     r["numero_oficio"],
+            "fecha_oficio":      r["fecha_oficio"],
+            "enlace_electronico": r["enlace_electronico"],
+            "archivo_xml":       r["archivo_xml"],
+        })
+
+        if datos_titular["titular"]:
+            db.insert_titular({
+                "expediente":      r["expediente"],
+                "titular":         datos_titular["titular"],
+                "telefono":        datos_titular["telefono"],
+                "email":           datos_titular["email"],
+                "fecha_notificado": datos_titular["fecha_notificado"],
+            })
+            count_saved += 1
+
+            if datos_titular["email"]:
+                upsert_perfil_brevo(
+                    email=datos_titular["email"],
+                    titular=datos_titular["titular"],
+                    telefono=datos_titular["telefono"],
+                    expediente=r["expediente"],
+                )
+                print(f"  📧 Enviando notificación al titular via Brevo...")
+                correo_ok = enviar_correo_brevo(
+                    destinatario=datos_titular["email"],
+                    titular=datos_titular["titular"],
+                    expediente=r["expediente"],
+                    descripcion=r["descripcion_oficio"],
+                )
+                if correo_ok:
+                    count_emails += 1
+
+            print(f"  📋 Guardando en Monday.com...")
+            crear_item_monday(
+                expediente=r["expediente"],
+                registro_marca=r["registro_marca"],
+                email=datos_titular.get("email"),
+                telefono=datos_titular.get("telefono"),
+                enlace_electronico=r["enlace_electronico"],
+                titular=datos_titular["titular"],
+                fecha_gaceta=get_yesterday(),
+                fecha_notificado=datos_titular.get("fecha_notificado"),
+            )
+
     db.disconnect()
-    
+
     if count_saved > 0:
         print(f"\n✓ Se guardaron {count_saved} registros en la BD")
         print(f"✓ Se enviaron {count_emails} correos de notificación")
     else:
-        print(f"\n✗ No se encontraron registros con '{SEARCH_PHRASE}'")
-    
+        print(f"\n✗ Ningún expediente tenía titular en MarcaNet")
+
     return count_saved, count_emails
 
 
