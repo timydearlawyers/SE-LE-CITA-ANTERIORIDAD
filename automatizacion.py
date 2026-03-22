@@ -12,7 +12,6 @@ import json
 import requests
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from klaviyo_api import KlaviyoAPI
 
 # Cargar variables de entorno
 load_dotenv()
@@ -26,7 +25,7 @@ XML_DIR.mkdir(exist_ok=True)
 
 AREA_TEXT = "Marcas"
 GACETA_TEXT = "Notificación de Resoluciones, Requerimientos y demás Actos"
-SEARCH_PHRASE = "SE LE COMUNICA IMPEDIMENTO LEGAL PARA EL REGISTRO"
+SEARCH_PHRASE = "SE LE INDICA (OPOSICIÓN)"
 
 # Variables de entorno
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -34,8 +33,9 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 HEADLESS = os.getenv("HEADLESS", "true").lower() == "true"
-KLAVIYO_API_KEY = os.getenv("KLAVIYO_API_KEY")
-KLAVIYO_LIST_ID = os.getenv("KLAVIYO_LIST_ID")
+BREVO_API_KEY  = os.getenv("BREVO_API_KEY")
+BREVO_LIST_ID  = int(os.getenv("BREVO_LIST_ID", "2"))
+BREVO_TEMPLATE_ID = int(os.getenv("BREVO_TEMPLATE_ID", "1"))
 MONDAY_API_TOKEN = os.getenv("MONDAY_API_TOKEN")
 MONDAY_BOARD_ID = os.getenv("MONDAY_BOARD_ID")
 
@@ -121,114 +121,91 @@ class SigaDatabase:
             return False
 
 
-# ─── Klaviyo ─────────────────────────────────────────────────────────────────
+# ─── Brevo ───────────────────────────────────────────────────────────────────
 
-def _klaviyo_client() -> KlaviyoAPI | None:
-    if not KLAVIYO_API_KEY:
-        print("    ⚠ KLAVIYO_API_KEY no configurado")
-        return None
-    return KlaviyoAPI(KLAVIYO_API_KEY, max_delay=60, max_retries=3)
+BREVO_API_URL = "https://api.brevo.com/v3"
+BREVO_HEADERS = {
+    "api-key": BREVO_API_KEY or "",
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+}
 
 
-def upsert_perfil_klaviyo(email: str, titular: str, telefono: str = None, expediente: str = None) -> str | None:
-    """Crea o actualiza un perfil en Klaviyo. Retorna el profile_id o None."""
-    client = _klaviyo_client()
-    if not client:
-        return None
+def upsert_perfil_brevo(email: str, titular: str, telefono: str = None, expediente: str = None) -> bool:
+    """Crea o actualiza un contacto en Brevo y lo agrega a la lista."""
+    if not BREVO_API_KEY:
+        print("    ⚠ BREVO_API_KEY no configurado")
+        return False
 
     try:
         parts = (titular or "").strip().split(" ", 1)
         first_name = parts[0]
         last_name  = parts[1] if len(parts) > 1 else ""
 
-        attributes: dict = {
-            "email": email,
-            "first_name": first_name,
-            "last_name": last_name,
-            "properties": {
-                "expediente": expediente or ""
-            }
+        attributes = {
+            "FIRSTNAME": first_name,
+            "LASTNAME": last_name,
+            "EXPEDIENTE": expediente or "",
         }
         if telefono:
-            attributes["phone_number"] = telefono
+            attributes["SMS"] = telefono
 
         body = {
-            "data": {
-                "type": "profile",
-                "attributes": attributes
-            }
+            "email": email,
+            "attributes": attributes,
+            "listIds": [BREVO_LIST_ID],
+            "updateEnabled": True,
         }
 
-        response = client.Profiles.create_or_update_profile(body)
-        profile_id = response.data.id
-        print(f"    ✓ Perfil Klaviyo upserted: {profile_id} ({email})")
-
-        # Agregar a la lista Stargazing
-        try:
-            client.Lists.create_list_relationships(
-                KLAVIYO_LIST_ID,
-                {"data": [{"type": "profile", "id": profile_id}]}
-            )
-            print(f"    ✓ Perfil agregado a lista Stargazing")
-        except Exception as e:
-            print(f"    ⚠ No se pudo agregar a lista: {e}")
-
-        return profile_id
-
-    except Exception as e:
-        print(f"    ✗ Error upserting perfil Klaviyo: {e}")
-        return None
-
-
-def enviar_correo_klaviyo(destinatario: str, titular: str, expediente: str, descripcion: str) -> bool:
-    """
-    Dispara el evento 'Oficio IMPI Recibido' en Klaviyo, lo que activa el flow
-    que envía el correo de notificación al titular.
-    El perfil se crea/actualiza automáticamente al registrar el evento.
-    """
-    client = _klaviyo_client()
-    if not client:
-        return False
-
-    try:
-        print(f"    📧 Disparando evento Klaviyo para: {destinatario}")
-
-        body = {
-            "data": {
-                "type": "event",
-                "attributes": {
-                    "profile": {
-                        "data": {
-                            "type": "profile",
-                            "attributes": {
-                                "email": destinatario,
-                                "first_name": titular
-                            }
-                        }
-                    },
-                    "metric": {
-                        "data": {
-                            "type": "metric",
-                            "attributes": {
-                                "name": "SE LE COMUNICA IMPEDIMENTO LEGAL PARA EL REGISTRO"
-                            }
-                        }
-                    },
-                    "properties": {
-                        "expediente": expediente,
-                        "descripcion": descripcion,
-                        "titular": titular
-                    }
-                }
-            }
-        }
-
-        client.Events.create_event(body)
-        print(f"    ✓ Evento Klaviyo registrado para: {destinatario}")
+        r = requests.post(f"{BREVO_API_URL}/contacts", json=body, headers=BREVO_HEADERS)
+        if r.status_code in (200, 201, 204):
+            print(f"    ✓ Contacto Brevo upserted: {email}")
+        elif r.status_code == 400 and "Contact already exist" in r.text:
+            print(f"    ✓ Contacto Brevo ya existía, actualizado: {email}")
+        else:
+            print(f"    ✗ Error upsert contacto Brevo [{r.status_code}]: {r.text}")
+            return False
         return True
 
     except Exception as e:
-        print(f"    ✗ Error disparando evento Klaviyo: {e}")
+        print(f"    ✗ Error upserting contacto Brevo: {e}")
+        return False
+
+
+def enviar_correo_brevo(destinatario: str, titular: str, expediente: str, descripcion: str) -> bool:
+    """Envía el correo de notificación via Brevo usando la plantilla configurada."""
+    if not BREVO_API_KEY:
+        print("    ⚠ BREVO_API_KEY no configurado")
+        return False
+
+    try:
+        print(f"    📧 Enviando correo Brevo para: {destinatario}")
+
+        parts = (titular or "").strip().split(" ", 1)
+        first_name = parts[0]
+
+        body = {
+            "to": [{"email": destinatario, "name": titular}],
+            "templateId": BREVO_TEMPLATE_ID,
+            "params": {
+                "titular": titular,
+                "FIRSTNAME": first_name,
+                "expediente": expediente,
+                "descripcion": descripcion,
+            },
+            "tags": ["IMPI-oposicion"],
+        }
+
+        r = requests.post(f"{BREVO_API_URL}/smtp/email", json=body, headers=BREVO_HEADERS)
+        if r.status_code in (200, 201):
+            print(f"    ✓ Correo Brevo enviado a: {destinatario}")
+            return True
+        else:
+            print(f"    ✗ Error enviando correo Brevo [{r.status_code}]: {r.text}")
+            return False
+
+    except Exception as e:
+        print(f"    ✗ Error enviando correo Brevo: {e}")
         return False
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -410,7 +387,7 @@ def enviar_reporte(count_expedientes: int, count_emails: int) -> bool:
                                                 <td style="padding: 20px; border-top: 1px solid #e0e0e0;">
                                                     <h3 style="color: #2261dd; margin-top: 0;">Detalles</h3>
                                                     <ul style="color: #333; font-size: 14px; line-height: 1.8;">
-                                                        <li>Se procesaron expedientes con la restricción 'SE LE COMUNICA IMPEDIMENTO LEGAL PARA EL REGISTRO'</li>
+                                                        <li>Se procesaron expedientes con la restricción 'SE LE INDICA (OPOSICIÓN)'</li>
                                                         <li>Los datos se han guardado en la base de datos de Supabase</li>
                                                         <li>Se han enviado notificaciones a los titulares correspondientes</li>
                                                     </ul>
@@ -1142,18 +1119,18 @@ def extract_from_xmls(xml_files, context):
                         db.insert_titular(data_titular)
                         count_saved += 1
                         
-                        # Guardar perfil en Klaviyo
+                        # Guardar contacto en Brevo
                         if datos_titular["email"]:
-                            upsert_perfil_klaviyo(
+                            upsert_perfil_brevo(
                                 email=datos_titular["email"],
                                 titular=datos_titular["titular"],
                                 telefono=datos_titular["telefono"],
                                 expediente=expediente
                             )
 
-                            # Disparar evento → activa el flow de correo en Klaviyo
-                            print(f"  📧 Enviando notificación al titular via Klaviyo...")
-                            correo_ok = enviar_correo_klaviyo(
+                            # Enviar correo via Brevo
+                            print(f"  📧 Enviando notificación al titular via Brevo...")
+                            correo_ok = enviar_correo_brevo(
                                 destinatario=datos_titular["email"],
                                 titular=datos_titular["titular"],
                                 expediente=expediente,
