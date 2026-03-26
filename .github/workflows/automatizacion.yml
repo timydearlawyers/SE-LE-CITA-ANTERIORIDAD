@@ -48,7 +48,7 @@ jobs:
           MONDAY_BOARD_ID:           ${{ secrets.MONDAY_BOARD_ID }}
           MONDAY_COLUMN_ID:          ${{ secrets.MONDAY_COLUMN_ID }}
           MONDAY_COLUMN_ID_ABIERTOS: ${{ secrets.MONDAY_COLUMN_ID_ABIERTOS }}
-          SMTP_USER:                 ${{ secrets.SMTP_USER }}
-          SMTP_PASSWORD:             ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_USER:                ${{ secrets.EMAIL_USER }}
+          EMAIL_PASSWORD:            ${{ secrets.EMAIL_PASSWORD }}
           NOTIFY_TO:                 ${{ secrets.NOTIFY_TO }}
         run: python correos_automaticos.py

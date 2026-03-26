@@ -34,8 +34,8 @@ MONDAY_HEADERS = {
     "Content-Type": "application/json",
 }
 
-SMTP_USER     = os.environ.get("SMTP_USER", "")
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+SMTP_USER     = os.environ.get("EMAIL_USER", "")
+SMTP_PASSWORD = os.environ.get("EMAIL_PASSWORD", "")
 NOTIFY_TO     = os.environ.get("NOTIFY_TO", "")
 
 # ── Notificaciones ────────────────────────────────────────────────────────────
