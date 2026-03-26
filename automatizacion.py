@@ -570,7 +570,7 @@ def enviar_reporte_semanal(datos: dict) -> bool:
 
 
 def get_yesterday() -> date:
-    return date.today()
+    return date.today() - timedelta(days=1)
 
 
 def sanitize_filename(name: str) -> str:
@@ -1059,6 +1059,7 @@ def extract_from_xmls(xml_files):
 
     # ── Paso 1: leer todos los XMLs y recolectar expedientes que coincidan ────
     pendientes = []
+    _desc_debug = []
     for xml_path in xml_files:
         print(f"Leyendo: {xml_path.name}")
         try:
@@ -1083,6 +1084,8 @@ def extract_from_xmls(xml_files):
                     elif c == "Fecha del oficio":       fecha_oficio      = v
                     elif c == "Enlace electrónico":     enlace_electronico = v
 
+                if descripcion_oficio:
+                    _desc_debug.append(descripcion_oficio)
                 if descripcion_oficio and SEARCH_PHRASE in descripcion_oficio:
                     pendientes.append({
                         "expediente":        expediente or "N/A",
@@ -1099,6 +1102,7 @@ def extract_from_xmls(xml_files):
 
     if not pendientes:
         print(f"\n✗ No se encontraron registros con '{SEARCH_PHRASE}'")
+        print(f"   (Descripciones encontradas en el XML: {list(set(_desc_debug))})")
         return 0, 0
 
     print(f"\n>> {len(pendientes)} expediente(s) encontrado(s) — consultando MarcaNet en paralelo...\n")
