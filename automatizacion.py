@@ -330,6 +330,16 @@ def enviar_reporte(count_expedientes: int, count_emails: int) -> bool:
         mensaje["To"] = ", ".join(destinatarios)
         mensaje["Subject"] = f"📊 Reporte Automatización STARGAZING - {fecha_reporte}"
 
+        # Bloque HTML condicional para 0 expedientes
+        sin_expedientes_html = f"""
+                                        <tr>
+                                            <td style="padding: 15px; background-color: #fff8e1; border-left: 4px solid #f0a500; text-align: center;">
+                                                <p style="margin: 0; font-size: 15px; color: #7a5c00; font-weight: bold;">No se encontraron expedientes con descripción de oficio</p>
+                                                <p style="margin: 8px 0 0 0; font-size: 14px; color: #7a5c00;">"SE LE CITA ANTERIORIDAD"</p>
+                                            </td>
+                                        </tr>
+""" if count_expedientes == 0 else ""
+
         # Cuerpo del correo HTML
         cuerpo = f"""
         <html>
@@ -391,6 +401,7 @@ def enviar_reporte(count_expedientes: int, count_emails: int) -> bool:
                                                                 <p style="margin: 10px 0 0 0; font-size: 32px; color: #1aa87a; font-weight: bold;">{count_emails}</p>
                                                             </td>
                                                         </tr>
+                                                        {sin_expedientes_html}
                                                     </table>
                                                 </td>
                                             </tr>
@@ -1202,11 +1213,8 @@ if __name__ == "__main__":
     expedientes, emails = download_and_extract()
     
     # Enviar reporte diario
-    if expedientes > 0:
-        print(f"\n📊 Enviando reporte con los resultados...")
-        enviar_reporte(expedientes, emails)
-    else:
-        print(f"\n📊 No hay datos para incluir en el reporte")
+    print(f"\n📊 Enviando reporte diario...")
+    enviar_reporte(expedientes, emails)
 
     # Reporte semanal: solo los viernes (weekday() == 4)
     if date.today().weekday() == 4:
