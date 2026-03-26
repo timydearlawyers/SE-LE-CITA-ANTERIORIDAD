@@ -25,17 +25,30 @@ jobs:
 
       - name: Ejecutar automatizacion.py
         env:
-          SUPABASE_URL:       ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY:       ${{ secrets.SUPABASE_KEY }}
-          EMAIL_USER:         ${{ secrets.EMAIL_USER }}
-          EMAIL_PASSWORD:     ${{ secrets.EMAIL_PASSWORD }}
-          BREVO_API_KEY:      ${{ secrets.BREVO_API_KEY }}
-          BREVO_LIST_ID:      ${{ secrets.BREVO_LIST_ID }}
-          BREVO_TEMPLATE_ID:  ${{ secrets.BREVO_TEMPLATE_ID }}
-          BREVO_TAG:          ${{ secrets.BREVO_TAG }}
-          MONDAY_API_TOKEN:   ${{ secrets.MONDAY_API_TOKEN }}
-          MONDAY_BOARD_ID:    ${{ secrets.MONDAY_BOARD_ID }}
-          MONDAY_COLUMN_ID:   ${{ secrets.MONDAY_COLUMN_ID }}
+          SUPABASE_URL:        ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:        ${{ secrets.SUPABASE_KEY }}
+          EMAIL_USER:          ${{ secrets.EMAIL_USER }}
+          EMAIL_PASSWORD:      ${{ secrets.EMAIL_PASSWORD }}
+          BREVO_API_KEY:       ${{ secrets.BREVO_API_KEY }}
+          BREVO_LIST_ID:       ${{ secrets.BREVO_LIST_ID }}
+          BREVO_TEMPLATE_ID:   ${{ secrets.BREVO_TEMPLATE_ID }}
+          BREVO_TAG:           ${{ secrets.BREVO_TAG }}
+          MONDAY_API_TOKEN:    ${{ secrets.MONDAY_API_TOKEN }}
+          MONDAY_BOARD_ID:     ${{ secrets.MONDAY_BOARD_ID }}
+          MONDAY_COLUMN_ID:    ${{ secrets.MONDAY_COLUMN_ID }}
           NOTIFICATION_EMAILS: ${{ secrets.NOTIFICATION_EMAILS }}
           HEADLESS: "true"
         run: python automatizacion.py
+
+      - name: Ejecutar correos_automaticos.py
+        env:
+          BREVO_API_KEY:             ${{ secrets.BREVO_API_KEY }}
+          BREVO_TAG:                 ${{ secrets.BREVO_TAG }}
+          MONDAY_API_TOKEN:          ${{ secrets.MONDAY_API_TOKEN }}
+          MONDAY_BOARD_ID:           ${{ secrets.MONDAY_BOARD_ID }}
+          MONDAY_COLUMN_ID:          ${{ secrets.MONDAY_COLUMN_ID }}
+          MONDAY_COLUMN_ID_ABIERTOS: ${{ secrets.MONDAY_COLUMN_ID_ABIERTOS }}
+          SMTP_USER:                 ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD:             ${{ secrets.SMTP_PASSWORD }}
+          NOTIFY_TO:                 ${{ secrets.NOTIFY_TO }}
+        run: python correos_automaticos.py
