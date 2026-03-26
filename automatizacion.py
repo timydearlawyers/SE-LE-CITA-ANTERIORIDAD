@@ -570,7 +570,7 @@ def enviar_reporte_semanal(datos: dict) -> bool:
 
 
 def get_yesterday() -> date:
-    return date.today() - timedelta(days=1)
+    return date.today()
 
 
 def sanitize_filename(name: str) -> str:
