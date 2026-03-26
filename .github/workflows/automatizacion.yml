@@ -1,0 +1,41 @@
+name: Automatización SIGA
+
+on:
+  schedule:
+    - cron: '0 16 * * 2-6'  # 10 AM Monterrey (UTC-6) martes a sábado
+  workflow_dispatch:
+
+jobs:
+  automatizacion:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium --with-deps
+
+      - name: Ejecutar automatizacion.py
+        env:
+          SUPABASE_URL:       ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:       ${{ secrets.SUPABASE_KEY }}
+          EMAIL_USER:         ${{ secrets.EMAIL_USER }}
+          EMAIL_PASSWORD:     ${{ secrets.EMAIL_PASSWORD }}
+          BREVO_API_KEY:      ${{ secrets.BREVO_API_KEY }}
+          BREVO_LIST_ID:      ${{ secrets.BREVO_LIST_ID }}
+          BREVO_TEMPLATE_ID:  ${{ secrets.BREVO_TEMPLATE_ID }}
+          BREVO_TAG:          ${{ secrets.BREVO_TAG }}
+          MONDAY_API_TOKEN:   ${{ secrets.MONDAY_API_TOKEN }}
+          MONDAY_BOARD_ID:    ${{ secrets.MONDAY_BOARD_ID }}
+          MONDAY_COLUMN_ID:   ${{ secrets.MONDAY_COLUMN_ID }}
+          NOTIFICATION_EMAILS: ${{ secrets.NOTIFICATION_EMAILS }}
+          HEADLESS: "true"
+        run: python automatizacion.py

@@ -16,7 +16,7 @@ BREVO_HEADERS = {
     "Content-Type": "application/json",
     "Accept": "application/json",
 }
-BREVO_TAG = "IMPI-oposicion"       # tag usado al enviar en automatizacion.py
+BREVO_TAG = os.environ["BREVO_TAG"]   # debe coincidir con el de automatizacion.py
 
 MONDAY_API_TOKEN  = os.environ["MONDAY_API_TOKEN"]
 MONDAY_BOARD_ID   = os.environ.get("MONDAY_BOARD_ID", "")
@@ -135,11 +135,12 @@ def obtener_emails_omitidos() -> list[str]:
 # ── Monday.com ────────────────────────────────────────────────────────────────
 
 def buscar_items_por_emails(emails: list[str]) -> list[dict]:
-    """Busca en Monday los items cuya columna Email coincida con los emails dados."""
+    """Busca en Monday los items cuya columna Email coincida con los emails dados (con paginación)."""
     query = """
-    query ($boardId: ID!) {
+    query ($boardId: ID!, $cursor: String) {
         boards(ids: [$boardId]) {
-            items_page(limit: 100) {
+            items_page(limit: 100, cursor: $cursor) {
+                cursor
                 items {
                     id
                     name
@@ -149,21 +150,29 @@ def buscar_items_por_emails(emails: list[str]) -> list[dict]:
         }
     }
     """
-    r = requests.post(
-        MONDAY_API_URL,
-        json={"query": query, "variables": {"boardId": MONDAY_BOARD_ID}},
-        headers=MONDAY_HEADERS,
-    )
-    r.raise_for_status()
-    items = r.json()["data"]["boards"][0]["items_page"]["items"]
-
     emails_lower = [e.lower() for e in emails]
-    encontrados = []
-    for item in items:
-        for col in item["column_values"]:
-            if col["text"] and col["text"].lower() in emails_lower:
-                encontrados.append({"id": item["id"], "name": item["name"]})
-                break
+    encontrados  = []
+    cursor       = None
+
+    while True:
+        r = requests.post(
+            MONDAY_API_URL,
+            json={"query": query, "variables": {"boardId": MONDAY_BOARD_ID, "cursor": cursor}},
+            headers=MONDAY_HEADERS,
+        )
+        r.raise_for_status()
+        page   = r.json()["data"]["boards"][0]["items_page"]
+        items  = page["items"]
+        cursor = page.get("cursor")
+
+        for item in items:
+            for col in item["column_values"]:
+                if col["text"] and col["text"].lower() in emails_lower:
+                    encontrados.append({"id": item["id"], "name": item["name"]})
+                    break
+
+        if not cursor:
+            break
 
     return encontrados
 

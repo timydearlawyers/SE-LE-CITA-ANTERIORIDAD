@@ -26,7 +26,7 @@ XML_DIR.mkdir(exist_ok=True)
 
 AREA_TEXT = "Marcas"
 GACETA_TEXT = "Notificación de Resoluciones, Requerimientos y demás Actos"
-SEARCH_PHRASE = "SE LE INDICA (OPOSICIÓN)"
+SEARCH_PHRASE = "SE LE CITA ANTERIORIDAD"
 
 # Variables de entorno
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -34,11 +34,13 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 HEADLESS = os.getenv("HEADLESS", "true").lower() == "true"
-BREVO_API_KEY  = os.getenv("BREVO_API_KEY")
-BREVO_LIST_ID  = int(os.getenv("BREVO_LIST_ID", "2"))
+BREVO_API_KEY     = os.getenv("BREVO_API_KEY")
+BREVO_LIST_ID     = int(os.getenv("BREVO_LIST_ID", "2"))
 BREVO_TEMPLATE_ID = int(os.getenv("BREVO_TEMPLATE_ID", "1"))
-MONDAY_API_TOKEN = os.getenv("MONDAY_API_TOKEN")
-MONDAY_BOARD_ID = os.getenv("MONDAY_BOARD_ID")
+BREVO_TAG         = os.environ["BREVO_TAG"]
+MONDAY_API_TOKEN  = os.getenv("MONDAY_API_TOKEN")
+MONDAY_BOARD_ID   = os.getenv("MONDAY_BOARD_ID")
+MONDAY_COLUMN_ID  = os.getenv("MONDAY_COLUMN_ID")
 
 
 class SigaDatabase:
@@ -125,17 +127,12 @@ def upsert_perfil_brevo(email: str, titular: str, telefono: str = None, expedien
         return False
 
     try:
-        parts = (titular or "").strip().split(" ", 1)
-        first_name = parts[0]
-        last_name  = parts[1] if len(parts) > 1 else ""
-
         attributes = {
-            "FIRSTNAME": first_name,
-            "LASTNAME": last_name,
+            "NOMBRE":     (titular or "").strip(),
             "EXPEDIENTE": expediente or "",
         }
         if telefono:
-            attributes["SMS"] = telefono
+            attributes["TELEFONO"] = telefono
 
         body = {
             "email": email,
@@ -180,7 +177,7 @@ def enviar_correo_brevo(destinatario: str, titular: str, expediente: str, descri
                 "expediente": expediente,
                 "descripcion": descripcion,
             },
-            "tags": ["IMPI-oposicion"],
+            "tags": [BREVO_TAG],
         }
 
         r = requests.post(f"{BREVO_API_URL}/smtp/email", json=body, headers=BREVO_HEADERS)
@@ -268,11 +265,42 @@ def crear_item_monday(expediente: str, registro_marca: str, email: str, telefono
 
         item_id = data["data"]["create_item"]["id"]
         print(f"    ✓ Item creado en Monday: {item_id}")
-        return True
+        return item_id
 
     except Exception as e:
         print(f"    ✗ Error creando item en Monday: {e}")
-        return False
+        return None
+
+
+def marcar_correo_enviado_monday(item_id: str):
+    """Marca el item como 'Listo' en la columna de correo enviado."""
+    if not MONDAY_API_TOKEN or not MONDAY_BOARD_ID or not MONDAY_COLUMN_ID:
+        return
+    try:
+        mutation = """
+        mutation ($boardId: ID!, $itemId: ID!, $columnId: String!, $value: JSON!) {
+            change_column_value(board_id: $boardId, item_id: $itemId, column_id: $columnId, value: $value) {
+                id
+            }
+        }
+        """
+        requests.post(
+            "https://api.monday.com/v2",
+            headers={"Content-Type": "application/json", "Authorization": MONDAY_API_TOKEN, "API-Version": "2024-01"},
+            json={
+                "query": mutation,
+                "variables": {
+                    "boardId": MONDAY_BOARD_ID,
+                    "itemId": item_id,
+                    "columnId": MONDAY_COLUMN_ID,
+                    "value": json.dumps({"label": "Listo"}),
+                },
+            },
+            timeout=30,
+        )
+        print(f"    ✓ Monday: correo marcado como 'Listo'")
+    except Exception as e:
+        print(f"    ✗ Error marcando 'Listo' en Monday: {e}")
 
 
 def enviar_reporte(count_expedientes: int, count_emails: int) -> bool:
@@ -374,7 +402,7 @@ def enviar_reporte(count_expedientes: int, count_emails: int) -> bool:
                                                 <td style="padding: 20px; border-top: 1px solid #e0e0e0;">
                                                     <h3 style="color: #2261dd; margin-top: 0;">Detalles</h3>
                                                     <ul style="color: #333; font-size: 14px; line-height: 1.8;">
-                                                        <li>Se procesaron expedientes con la restricción 'SE LE INDICA (OPOSICIÓN)'</li>
+                                                        <li>Se procesaron expedientes con la restricción 'SE LE CITA ANTERIORIDAD'</li>
                                                         <li>Los datos se han guardado en la base de datos de Supabase</li>
                                                         <li>Se han enviado notificaciones a los titulares correspondientes</li>
                                                     </ul>
@@ -571,9 +599,7 @@ def download_and_extract():
             try:
                 page.click('a:has-text("Ejemplares")', timeout=10000)
                 print("Ejemplares abierto")
-                time.sleep(3)
-                page.wait_for_load_state("networkidle", timeout=10000)
-                time.sleep(2)
+                time.sleep(5)
             except Exception as e:
                 print(f"Error: {e}")
 
@@ -795,7 +821,7 @@ def download_and_extract():
                 print(f"Error buscando: {e}")
 
             print("\n\nProcesando XMLs...")
-            count_expedientes, count_emails = extract_from_xmls(xml_files_downloaded, browser)
+            count_expedientes, count_emails = extract_from_xmls(xml_files_downloaded)
             return count_expedientes, count_emails
 
         except Exception as e:
@@ -1007,21 +1033,24 @@ def buscar_datos_titular(page, expediente: str, numero_oficio: str = None) -> di
         }
 
 
-def _worker_marcanet(exp_data: dict, browser) -> dict:
-    """Corre en un hilo: abre su propio context/page y busca datos en MarcaNet."""
-    ctx = browser.new_context()
-    page = ctx.new_page()
-    try:
-        datos = buscar_datos_titular(page, exp_data["expediente"], exp_data["numero_oficio"])
-        return {**exp_data, "datos_titular": datos}
-    except Exception as e:
-        print(f"  ✗ Error worker MarcaNet ({exp_data['expediente']}): {e}")
-        return {**exp_data, "datos_titular": {"titular": None, "telefono": None, "email": None, "fecha_notificado": None}}
-    finally:
-        ctx.close()
+def _worker_marcanet(exp_data: dict) -> dict:
+    """Cada hilo lanza su propio Playwright — completamente thread-safe."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=HEADLESS)
+        ctx = browser.new_context()
+        page = ctx.new_page()
+        try:
+            datos = buscar_datos_titular(page, exp_data["expediente"], exp_data["numero_oficio"])
+            return {**exp_data, "datos_titular": datos}
+        except Exception as e:
+            print(f"  ✗ Error worker MarcaNet ({exp_data['expediente']}): {e}")
+            return {**exp_data, "datos_titular": {"titular": None, "telefono": None, "email": None, "fecha_notificado": None}}
+        finally:
+            ctx.close()
+            browser.close()
 
 
-def extract_from_xmls(xml_files, browser):
+def extract_from_xmls(xml_files):
     if not xml_files:
         print("No hay XMLs para procesar")
         return 0, 0
@@ -1078,7 +1107,7 @@ def extract_from_xmls(xml_files, browser):
     max_workers = min(10, len(pendientes))
     resultados = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(_worker_marcanet, exp, browser): exp for exp in pendientes}
+        futures = {executor.submit(_worker_marcanet, exp): exp for exp in pendientes}
         for future in as_completed(futures):
             try:
                 resultados.append(future.result())
@@ -1118,6 +1147,7 @@ def extract_from_xmls(xml_files, browser):
             })
             count_saved += 1
 
+            correo_ok = False
             if datos_titular["email"]:
                 upsert_perfil_brevo(
                     email=datos_titular["email"],
@@ -1135,8 +1165,8 @@ def extract_from_xmls(xml_files, browser):
                 if correo_ok:
                     count_emails += 1
 
-            print(f"  📋 Guardando en Monday.com...")
-            crear_item_monday(
+            print(f"  📋 Creando item en Monday.com...")
+            item_id = crear_item_monday(
                 expediente=r["expediente"],
                 registro_marca=r["registro_marca"],
                 email=datos_titular.get("email"),
@@ -1146,6 +1176,8 @@ def extract_from_xmls(xml_files, browser):
                 fecha_gaceta=get_yesterday(),
                 fecha_notificado=datos_titular.get("fecha_notificado"),
             )
+            if item_id and correo_ok:
+                marcar_correo_enviado_monday(item_id)
 
     db.disconnect()
 

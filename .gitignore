@@ -1,0 +1,7 @@
+.env
+*.html
+test_*.py
+xml_files/
+downloads/
+__pycache__/
+*.pyc
