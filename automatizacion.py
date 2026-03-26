@@ -630,7 +630,7 @@ def download_and_extract():
             time.sleep(1)
 
             # Fecha - ayer dos veces
-            print(f"  - Seleccionando fecha: {yesterday.strftime('%d/%m')}")
+            print(f"  - Seleccionando fecha: {yesterday.strftime('%d/%m/%Y')} (día {yesterday.day})")
             try:
                 page.wait_for_selector("button[aria-label='Open calendar']:not([disabled])", timeout=15000)
                 date_button = page.locator("button[aria-label='Open calendar']").first
@@ -642,13 +642,17 @@ def download_and_extract():
 
                 day_str = str(yesterday.day)
                 day_cells = page.locator("[role='gridcell']").filter(has_text=day_str).all()
-                
+                print(f"    Buscando día '{day_str}' — {len(day_cells)} celda(s) encontrada(s)")
+                for i, cell in enumerate(day_cells):
+                    label = cell.get_attribute("aria-label") or cell.text_content()
+                    print(f"      [{i}] aria-label: {label}")
+
                 if len(day_cells) > 0:
                     day_cells[0].click(timeout=3000)
                     time.sleep(0.5)
                     day_cells[0].click(timeout=3000)
                     time.sleep(0.5)
-                    print("    Fecha seleccionada")
+                    print(f"    Fecha seleccionada: {yesterday.strftime('%d/%m/%Y')}")
                 else:
                     print("    Dia no encontrado")
                     
