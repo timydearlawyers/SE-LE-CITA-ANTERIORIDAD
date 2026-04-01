@@ -23,9 +23,11 @@ MONDAY_BOARD_ID   = os.environ.get("MONDAY_BOARD_ID", "")
 MONDAY_COLUMN_ID  = os.environ.get("MONDAY_COLUMN_ID", "")
 MONDAY_COLUMN_ID_ABIERTOS = os.environ.get("MONDAY_COLUMN_ID_ABIERTOS", "")
 
-MONDAY_STATUS_LABEL_ABIERTOS  = "Abierto"
-MONDAY_STATUS_LABEL_REBOTADOS = "Bounced / Error"
-MONDAY_STATUS_LABEL_OMITIDOS  = "No abierto"
+MONDAY_STATUS_LABEL_ABIERTOS     = "Abierto"
+MONDAY_STATUS_LABEL_REBOTADOS    = "Bounced / Error"
+MONDAY_STATUS_LABEL_OMITIDOS     = "No abierto"
+MONDAY_STATUS_LABEL_CLICKED      = "Clicked"
+MONDAY_STATUS_LABEL_UNSUSCRIBED  = "Unsuscribed"
 
 MONDAY_API_URL = "https://api.monday.com/v2"
 MONDAY_HEADERS = {
@@ -116,6 +118,20 @@ def obtener_emails_rebotados() -> list[str]:
     soft   = _obtener_eventos_brevo("softBounces")
     emails = list({*hard, *soft})   # unión sin duplicados
     print(f">> {len(emails)} rebotado(s) encontrado(s).")
+    return emails
+
+
+def obtener_emails_clicked() -> list[str]:
+    print(">> Consultando correos 'Clicked' en Brevo...")
+    emails = _obtener_eventos_brevo("clicks")
+    print(f">> {len(emails)} clicked encontrado(s).")
+    return emails
+
+
+def obtener_emails_unsuscribed() -> list[str]:
+    print(">> Consultando correos 'Unsuscribed' en Brevo...")
+    emails = _obtener_eventos_brevo("unsubscribed")
+    print(f">> {len(emails)} unsuscribed encontrado(s).")
     return emails
 
 
@@ -219,9 +235,11 @@ def main():
     print("=" * 50)
 
     try:
-        abiertos  = obtener_emails_abiertos()
-        rebotados = obtener_emails_rebotados()
-        omitidos  = obtener_emails_omitidos(set(abiertos))
+        abiertos    = obtener_emails_abiertos()
+        rebotados   = obtener_emails_rebotados()
+        clicked     = obtener_emails_clicked()
+        unsuscribed = obtener_emails_unsuscribed()
+        omitidos    = obtener_emails_omitidos(set(abiertos))
     except Exception as e:
         enviar_notificacion(
             "❌ Error en automatización Brevo + Monday",
@@ -230,7 +248,7 @@ def main():
         )
         raise
 
-    print(f"\n✓ Brevo: {len(abiertos)} abierto(s), {len(rebotados)} rebotado(s), {len(omitidos)} no abierto(s)")
+    print(f"\n✓ Brevo: {len(abiertos)} abierto(s), {len(rebotados)} rebotado(s), {len(clicked)} clicked, {len(unsuscribed)} unsuscribed, {len(omitidos)} no abierto(s)")
 
     # Cargar items del board una sola vez
     items_board = []
@@ -249,8 +267,18 @@ def main():
     else:
         print(">> No hay correos rebotados, no se actualiza Monday.")
 
+    if clicked:
+        monday_actualizar(items_board, clicked,     MONDAY_COLUMN_ID_ABIERTOS, MONDAY_STATUS_LABEL_CLICKED,     "clicked")
+    else:
+        print(">> No hay correos clicked, no se actualiza Monday.")
+
+    if unsuscribed:
+        monday_actualizar(items_board, unsuscribed, MONDAY_COLUMN_ID_ABIERTOS, MONDAY_STATUS_LABEL_UNSUSCRIBED, "unsuscribed")
+    else:
+        print(">> No hay correos unsuscribed, no se actualiza Monday.")
+
     if omitidos:
-        monday_actualizar(items_board, omitidos,  MONDAY_COLUMN_ID_ABIERTOS, MONDAY_STATUS_LABEL_OMITIDOS,  "omitidos")
+        monday_actualizar(items_board, omitidos,    MONDAY_COLUMN_ID_ABIERTOS, MONDAY_STATUS_LABEL_OMITIDOS,    "omitidos")
     else:
         print(">> No hay correos no abiertos, no se actualiza Monday.")
 
