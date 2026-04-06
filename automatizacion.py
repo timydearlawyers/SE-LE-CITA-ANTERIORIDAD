@@ -658,6 +658,18 @@ def download_and_extract():
                     label = cell.get_attribute("aria-label") or cell.text_content()
                     print(f"      [{i}] aria-label: {label}")
 
+                # Si no encontró el día, navegar al mes anterior y reintentar
+                if len(day_cells) == 0:
+                    print("    Día no encontrado — navegando al mes anterior...")
+                    try:
+                        prev_btn = page.locator("button[aria-label='Previous month']").first
+                        prev_btn.click(timeout=3000)
+                        time.sleep(0.5)
+                        day_cells = page.locator("[role='gridcell']").filter(has_text=day_str).all()
+                        print(f"    Reintento: {len(day_cells)} celda(s) encontrada(s)")
+                    except Exception as e2:
+                        print(f"    Error navegando mes anterior: {e2}")
+
                 if len(day_cells) > 0:
                     day_cells[0].click(timeout=3000)
                     time.sleep(0.5)
@@ -665,12 +677,15 @@ def download_and_extract():
                     time.sleep(0.5)
                     print(f"    Fecha seleccionada: {yesterday.strftime('%d/%m/%Y')}")
                 else:
-                    print("    Dia no encontrado")
-                    
+                    print("    Día no encontrado — cerrando calendario")
+                    page.keyboard.press("Escape")
+                    time.sleep(0.5)
+
             except Exception as e:
                 print(f"    Error: {e}")
                 try:
                     page.keyboard.press("Escape")
+                    time.sleep(0.5)
                 except:
                     pass
 
