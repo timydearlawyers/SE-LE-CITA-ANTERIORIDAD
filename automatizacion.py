@@ -928,7 +928,9 @@ def obtener_notificacion(page, numero_oficio: str) -> str:
             filas = page.locator(f"{tabla_selector} tbody tr")
 
         total_filas = filas.count()
+        print(f"      ℹ Filas en tabla Trámite: {total_filas}")
         if total_filas == 0:
+            print("      ⚠ Tabla Trámite vacía (0 filas)")
             return None
 
         for i in range(total_filas):
@@ -936,6 +938,7 @@ def obtener_notificacion(page, numero_oficio: str) -> str:
             lupa_link = fila.locator("td").nth(col_index).locator("a, button").first
 
             if lupa_link.count() == 0:
+                print(f"      ⚠ Fila {i+1}: sin lupa (col_index={col_index})")
                 continue
 
             try:
@@ -959,20 +962,25 @@ def obtener_notificacion(page, numero_oficio: str) -> str:
                             }});
                             if (idxOficio === -1 || idxEstado === -1) continue;
                             const filas = Array.from(table.querySelectorAll("tbody tr"));
+                            const oficiosEncontrados = [];
                             for (const fila of filas) {{
                                 const celdas = Array.from(fila.querySelectorAll("td"));
                                 if (celdas.length <= Math.max(idxOficio, idxEstado)) continue;
                                 const textoOficio = (celdas[idxOficio].textContent || "").trim().toUpperCase();
+                                oficiosEncontrados.push(textoOficio);
                                 if (textoOficio === "{numero_oficio.upper()}") {{
-                                    return {{ encontrado: true, estado: (celdas[idxEstado].textContent || "").trim() }};
+                                    return {{ encontrado: true, estado: (celdas[idxEstado].textContent || "").trim(), oficios: oficiosEncontrados }};
                                 }}
                             }}
+                            return {{ encontrado: false, estado: null, oficios: oficiosEncontrados }};
                         }}
-                        return {{ encontrado: false, estado: null }};
+                        return {{ encontrado: false, estado: null, oficios: [] }};
                     }}
                 """)
 
                 texto_estado = resultado['estado'] if resultado['encontrado'] else None
+                if not resultado['encontrado']:
+                    print(f"      ⚠ Lupa {i+1}: oficio buscado='{numero_oficio.upper()}' | oficios en modal={resultado.get('oficios', [])}")
 
                 try:
                     close_btn = modal.locator("a.ui-dialog-titlebar-close, button.ui-dialog-titlebar-close, span.ui-icon-closethick").first
