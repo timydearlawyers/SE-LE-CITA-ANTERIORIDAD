@@ -194,6 +194,26 @@ def enviar_correo_brevo(destinatario: str, titular: str, expediente: str, descri
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+def listar_columns_monday():
+    """Lista los IDs y títulos de todas las columnas del board de Monday (diagnóstico)."""
+    if not MONDAY_API_TOKEN or not MONDAY_BOARD_ID:
+        return
+    query = "{ boards(ids: [" + str(MONDAY_BOARD_ID) + "]) { columns { id title } } }"
+    try:
+        resp = requests.post(
+            "https://api.monday.com/v2",
+            headers={"Content-Type": "application/json", "Authorization": MONDAY_API_TOKEN, "API-Version": "2024-01"},
+            json={"query": query},
+            timeout=15,
+        )
+        cols = resp.json()["data"]["boards"][0]["columns"]
+        print("  🗂 Columnas del board de Monday:")
+        for c in cols:
+            print(f"      id={c['id']!r:30s}  título={c['title']}")
+    except Exception as e:
+        print(f"  ⚠ No se pudieron listar columnas de Monday: {e}")
+
+
 def crear_item_monday(expediente: str, registro_marca: str, email: str, telefono: str,
                       enlace_electronico: str, titular: str,
                       fecha_gaceta: date = None, fecha_notificado: str = None) -> bool:
@@ -258,9 +278,11 @@ def crear_item_monday(expediente: str, registro_marca: str, email: str, telefono
 
         data = response.json()
 
+        print(f"    🔍 Monday column_values enviados: {json.dumps(column_values)}")
+
         if "errors" in data:
             print(f"    ✗ Error Monday: {data['errors'][0]['message']}")
-            print(f"    ✗ Column values enviados: {json.dumps(column_values, indent=2)}")
+            print(f"    🔍 Monday response completo: {data}")
             return False
 
         item_id = data["data"]["create_item"]["id"]
@@ -952,13 +974,16 @@ def obtener_notificacion(page, numero_oficio: str) -> str:
                 resultado = modal.evaluate(f"""
                     (el) => {{
                         const tables = Array.from(el.querySelectorAll("table"));
+                        const allHeaders = [];
                         for (const table of tables) {{
                             const headers = Array.from(table.querySelectorAll("th"));
                             let idxOficio = -1, idxEstado = -1;
                             headers.forEach((th, i) => {{
-                                const txt = (th.textContent || "").trim().toLowerCase();
-                                if (txt.includes("número del oficio") || txt.includes("numero del oficio")) idxOficio = i;
-                                if (txt.includes("estado de la notificación") || txt.includes("estado de la notificacion")) idxEstado = i;
+                                const txt = (th.textContent || "").trim().toLowerCase()
+                                    .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+                                allHeaders.push(txt);
+                                if (txt.includes("oficio")) idxOficio = i;
+                                if (txt.includes("estado") || txt.includes("notif")) idxEstado = i;
                             }});
                             if (idxOficio === -1 || idxEstado === -1) continue;
                             const filas = Array.from(table.querySelectorAll("tbody tr"));
@@ -969,18 +994,18 @@ def obtener_notificacion(page, numero_oficio: str) -> str:
                                 const textoOficio = (celdas[idxOficio].textContent || "").trim().toUpperCase();
                                 oficiosEncontrados.push(textoOficio);
                                 if (textoOficio === "{numero_oficio.upper()}") {{
-                                    return {{ encontrado: true, estado: (celdas[idxEstado].textContent || "").trim(), oficios: oficiosEncontrados }};
+                                    return {{ encontrado: true, estado: (celdas[idxEstado].textContent || "").trim(), oficios: oficiosEncontrados, headers: allHeaders }};
                                 }}
                             }}
-                            return {{ encontrado: false, estado: null, oficios: oficiosEncontrados }};
+                            return {{ encontrado: false, estado: null, oficios: oficiosEncontrados, headers: allHeaders }};
                         }}
-                        return {{ encontrado: false, estado: null, oficios: [] }};
+                        return {{ encontrado: false, estado: null, oficios: [], headers: allHeaders }};
                     }}
                 """)
 
                 texto_estado = resultado['estado'] if resultado['encontrado'] else None
                 if not resultado['encontrado']:
-                    print(f"      ⚠ Lupa {i+1}: oficio buscado='{numero_oficio.upper()}' | oficios en modal={resultado.get('oficios', [])}")
+                    print(f"      ⚠ Lupa {i+1}: oficio buscado='{numero_oficio.upper()}' | oficios en modal={resultado.get('oficios', [])} | headers={resultado.get('headers', [])}")
 
                 try:
                     close_btn = modal.locator("a.ui-dialog-titlebar-close, button.ui-dialog-titlebar-close, span.ui-icon-closethick").first
@@ -1143,6 +1168,7 @@ def extract_from_xmls(xml_files):
         print(f"   (Descripciones encontradas en el XML: {list(set(_desc_debug))})")
         return 0, 0
 
+    listar_columns_monday()
     print(f"\n>> {len(pendientes)} expediente(s) encontrado(s) — consultando MarcaNet en paralelo...\n")
 
     # ── Paso 2: lookups en MarcaNet en paralelo ───────────────────────────────
